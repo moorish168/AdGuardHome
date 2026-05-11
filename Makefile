@@ -102,6 +102,10 @@ test: js-test go-test
 .PHONY: build-docker
 build-docker: ; $(ENV) "$(SHELL)" ./scripts/make/build-docker.sh
 
+.PHONY: build-mikrotik
+build-mikrotik: js-build go-deps
+	$(ENV) "$(SHELL)" ./scripts/make/build-mikrotik.sh
+
 .PHONY: build-release
 build-release: $(BUILD_RELEASE_DEPS_$(FRONTEND_PREBUILT))
 	$(ENV) "$(SHELL)" ./scripts/make/build-release.sh
