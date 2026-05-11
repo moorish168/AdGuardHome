@@ -54,7 +54,7 @@ func (s *Server) processUpstreamAntiPollution(
 	inBlacklist := domainMatchesWildcard(host, s.conf.DomainBlacklist)
 	inWhitelist := domainMatchesWildcard(host, s.conf.DomainWhitelist)
 
-	l.DebugContext(ctx, "anti-pollution domain match",
+	l.DebugContext(ctx, "anti-pollution domain filter",
 		"host", host,
 		"in_blacklist", inBlacklist,
 		"in_whitelist", inWhitelist,
@@ -62,8 +62,12 @@ func (s *Server) processUpstreamAntiPollution(
 
 	switch {
 	case inWhitelist && inBlacklist, inBlacklist:
+		l.DebugContext(ctx, "anti-pollution: chose trusted (domain in blacklist)")
+
 		return s.resolveWithGroup(ctx, l, dctx, trusted)
 	case inWhitelist:
+		l.DebugContext(ctx, "anti-pollution: chose untrusted (domain in whitelist)")
+
 		return s.resolveWithGroup(ctx, l, dctx, untrusted)
 	default:
 		return s.processAntiPollutionBoth(ctx, l, dctx, trusted, untrusted)
@@ -71,15 +75,11 @@ func (s *Server) processUpstreamAntiPollution(
 }
 
 // processAntiPollutionBoth queries both trusted and untrusted upstreams in
-// parallel, then applies IP-level blacklist/whitelist filtering on the
-// untrusted result.
+// parallel, then applies the rule:
 //
-// Safety guarantees:
-//   - If the IP filtering says trusted is required but trusted is unreachable,
-//     a SERVFAIL is returned — the untrusted result is NEVER used as a
-//     substitute.
-//   - Each request makes exactly one decision pass; there is no retry loop
-//     that could oscillate between trusted and untrusted upstreams.
+//   - IP matches whitelist → use untrusted (confirmed safe)
+//   - Everything else       → use trusted  (assume polluted)
+//   - Trusted unreachable   → return error, NEVER fall back to untrusted
 func (s *Server) processAntiPollutionBoth(
 	ctx context.Context,
 	l *slog.Logger,
@@ -87,6 +87,7 @@ func (s *Server) processAntiPollutionBoth(
 	trusted, untrusted []upstream.Upstream,
 ) (rc resultCode) {
 	req := dctx.proxyCtx.Req
+	host := strings.TrimSuffix(req.Question[0].Name, ".")
 
 	type exchangeResult struct {
 		resp *dns.Msg
@@ -115,69 +116,63 @@ func (s *Server) processAntiPollutionBoth(
 	wg.Wait()
 
 	if trustedRes.err != nil {
-		l.DebugContext(ctx, "trusted exchange failed", "err", trustedRes.err)
+		l.DebugContext(ctx, "anti-pollution: trusted exchange failed",
+			"err", trustedRes.err,
+		)
 	}
 	if untrustedRes.err != nil {
-		l.DebugContext(ctx, "untrusted exchange failed", "err", untrustedRes.err)
+		l.DebugContext(ctx, "anti-pollution: untrusted exchange failed",
+			"err", untrustedRes.err,
+		)
 	}
 
-	untrustedOK := untrustedRes.resp != nil
 	trustedOK := trustedRes.resp != nil
+	untrustedOK := untrustedRes.resp != nil
 
-	if untrustedOK {
+	if untrustedOK && trustedOK {
 		ips := extractIPsFromMsg(untrustedRes.resp)
-		ipInBlacklist := ipMatchesAny(ips, s.conf.IPBlacklist)
 		ipInWhitelist := ipMatchesAny(ips, s.conf.IPWhitelist)
+		ipInBlacklist := ipMatchesAny(ips, s.conf.IPBlacklist)
 
-		l.DebugContext(ctx, "anti-pollution ip match",
-			"ips", ips,
-			"ip_in_blacklist", ipInBlacklist,
+		l.DebugContext(ctx, "anti-pollution ip filter",
+			"host", host,
+			"untrusted_ips", ipStrings(ips),
 			"ip_in_whitelist", ipInWhitelist,
+			"ip_in_blacklist", ipInBlacklist,
 		)
 
-		switch {
-		case ipInBlacklist && ipInWhitelist:
-			if trustedOK {
-				s.setResponse(dctx, trustedRes.resp, trustedRes.u)
+		if ipInWhitelist {
+			l.DebugContext(ctx, "anti-pollution: chose untrusted (ip in whitelist)")
 
-				return resultCodeSuccess
-			}
-
-			s.antiPollutionBlock(ctx, l, dctx, "both_blacklist_and_whitelist")
-
-			return resultCodeFinish
-
-		case ipInBlacklist:
-			if trustedOK {
-				s.setResponse(dctx, trustedRes.resp, trustedRes.u)
-
-				return resultCodeSuccess
-			}
-
-			s.antiPollutionBlock(ctx, l, dctx, "ip_blacklist_trusted_unreachable")
-
-			return resultCodeFinish
-
-		case ipInWhitelist:
-			s.setResponse(dctx, untrustedRes.resp, untrustedRes.u)
-
-			return resultCodeSuccess
-
-		default:
 			s.setResponse(dctx, untrustedRes.resp, untrustedRes.u)
 
 			return resultCodeSuccess
 		}
-	}
 
-	if trustedOK {
+		l.DebugContext(ctx, "anti-pollution: chose trusted (ip not in whitelist)")
+
 		s.setResponse(dctx, trustedRes.resp, trustedRes.u)
 
 		return resultCodeSuccess
 	}
 
+	// Non-whitelist, only trusted available.
+	if trustedOK {
+		l.DebugContext(ctx, "anti-pollution: chose trusted (only trusted reached)")
+
+		s.setResponse(dctx, trustedRes.resp, trustedRes.u)
+
+		return resultCodeSuccess
+	}
+
+	// Only untrusted available, trusted is unreachable.
+	// Return error — NEVER use untrusted alone to avoid cache pollution.
+	if untrustedOK {
+		l.DebugContext(ctx, "anti-pollution: blocking response, trusted unreachable, refusing to use untrusted alone")
+	}
+
 	dctx.err = fmt.Errorf(
-		"all anti-pollution upstreams failed: trusted: %w, untrusted: %w",
+		"anti-pollution failed: trusted unreachable (trusted: %w, untrusted: %w)",
 		trustedRes.err,
 		untrustedRes.err,
 	)
@@ -414,6 +409,15 @@ func ipMatchesPattern(addr netip.Addr, pattern string) (ok bool) {
 	}
 
 	return addr == target
+}
+
+// ipStrings formats ips for logging.
+func ipStrings(ips []netip.Addr) (ss []string) {
+	for _, ip := range ips {
+		ss = append(ss, ip.String())
+	}
+
+	return ss
 }
 
 // extractIPsFromMsg extracts all A and AAAA record IPs from a DNS response.

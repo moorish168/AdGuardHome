@@ -22,6 +22,7 @@ const UPSTREAM_DNS_NAME = 'upstream_dns';
 
 type FormData = {
     upstream_dns: string;
+    trusted_upstream_dns: string;
     upstream_mode: string;
     fallback_dns: string;
     bootstrap_dns: string;
@@ -50,6 +51,7 @@ const Form = ({ initialValues, onSubmit }: FormProps) => {
         mode: 'onBlur',
         defaultValues: {
             upstream_dns: initialValues?.upstream_dns || '',
+            trusted_upstream_dns: initialValues?.trusted_upstream_dns || '',
             upstream_mode: initialValues?.upstream_mode || DNS_REQUEST_OPTIONS.LOAD_BALANCING,
             fallback_dns: initialValues?.fallback_dns || '',
             bootstrap_dns: initialValues?.bootstrap_dns || '',
@@ -146,6 +148,34 @@ const Form = ({ initialValues, onSubmit }: FormProps) => {
                             )}
                         />
                     </div>
+                </div>
+
+                <div className="col-12">
+                    <label className="form__label form__label--with-desc" htmlFor="trusted_upstream_dns">
+                        {t('trusted_upstream_dns')}
+                    </label>
+
+                    <div className="form__desc form__desc--top">{t('trusted_upstream_dns_desc')}</div>
+
+                    <Controller
+                        name="trusted_upstream_dns"
+                        control={control}
+                        render={({ field }) => (
+                            <Textarea
+                                {...field}
+                                id="trusted_upstream_dns"
+                                data-testid="trusted_upstream_dns"
+                                wrapperClassName="mb-0"
+                                placeholder={t('trusted_upstream_dns_placeholder')}
+                                disabled={processingSetConfig}
+                                trimOnBlur
+                            />
+                        )}
+                    />
+                </div>
+
+                <div className="col-12">
+                    <hr />
                 </div>
 
                 <div className="col-12">

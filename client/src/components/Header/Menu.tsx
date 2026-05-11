@@ -202,7 +202,7 @@ class Menu extends Component<MenuProps> {
                         <li className="nav-item order-3">
                             {this.getDropdown({
                                 order: 3,
-                                label: 'trusted_filtering',
+                                label: 'block_allow_lists',
                                 icon: 'filters',
                                 URLS: TRUSTED_FILTERS_URLS,
                                 ITEMS: TRUSTED_FILTERS_ITEMS,

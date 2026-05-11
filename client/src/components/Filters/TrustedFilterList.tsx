@@ -111,18 +111,20 @@ class TrustedFilterList extends Component<TrustedFilterListProps, TrustedFilterL
                             )}
                         </div>
                         <div className="card-actions">
-                            <button
-                                className="btn btn-success btn-standard btn-large"
-                                type="submit">
-                                <Trans>apply_btn</Trans>
-                            </button>
-                            <button
-                                className="btn btn-outline-secondary btn-standard"
-                                type="button"
-                                disabled={uploading}
-                                onClick={() => this.fileInputRef.current?.click()}>
-                                {uploading ? <Trans>processing</Trans> : <Trans>upload_file</Trans>}
-                            </button>
+                            <div className="btn-list">
+                                <button
+                                    className="btn btn-outline-secondary btn-standard"
+                                    type="button"
+                                    disabled={uploading}
+                                    onClick={() => this.fileInputRef.current?.click()}>
+                                    {uploading ? <Trans>processing</Trans> : <Trans>upload_file</Trans>}
+                                </button>
+                                <button
+                                    className="btn btn-success btn-standard btn-large"
+                                    type="submit">
+                                    <Trans>apply_btn</Trans>
+                                </button>
+                            </div>
                             <input
                                 ref={this.fileInputRef}
                                 type="file"

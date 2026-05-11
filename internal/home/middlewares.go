@@ -46,7 +46,9 @@ func expectsLargerRequests(r *http.Request) (ok bool) {
 	}
 
 	switch r.URL.Path {
-	case "/control/access/set", "/control/filtering/set_rules":
+	case "/control/access/set", "/control/filtering/set_rules",
+		"/control/domain_blacklist/set", "/control/domain_whitelist/set",
+		"/control/ip_blacklist/set", "/control/ip_whitelist/set":
 		return true
 	default:
 		return false

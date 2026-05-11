@@ -843,61 +843,85 @@ type listSetReq struct {
 	Append bool     `json:"append"`
 }
 
-func (s *Server) handleDomainBlacklist(w http.ResponseWriter, r *http.Request) {
-	s.handleListEndpoint(w, r, &s.conf.DomainBlacklist)
+// handleDomainBlacklist handles the GET /control/domain_blacklist endpoint.
+func (s *Server) handleDomainBlacklistGET(w http.ResponseWriter, r *http.Request) {
+	s.handleListGet(w, r, &s.conf.DomainBlacklist)
 }
 
-func (s *Server) handleDomainWhitelist(w http.ResponseWriter, r *http.Request) {
-	s.handleListEndpoint(w, r, &s.conf.DomainWhitelist)
+// handleDomainBlacklistSet handles the POST /control/domain_blacklist/set endpoint.
+func (s *Server) handleDomainBlacklistSet(w http.ResponseWriter, r *http.Request) {
+	s.handleListSet(w, r, &s.conf.DomainBlacklist)
 }
 
-func (s *Server) handleIPBlacklist(w http.ResponseWriter, r *http.Request) {
-	s.handleListEndpoint(w, r, &s.conf.IPBlacklist)
+// handleDomainWhitelist handles the GET /control/domain_whitelist endpoint.
+func (s *Server) handleDomainWhitelistGET(w http.ResponseWriter, r *http.Request) {
+	s.handleListGet(w, r, &s.conf.DomainWhitelist)
 }
 
-func (s *Server) handleIPWhitelist(w http.ResponseWriter, r *http.Request) {
-	s.handleListEndpoint(w, r, &s.conf.IPWhitelist)
+// handleDomainWhitelistSet handles the POST /control/domain_whitelist/set endpoint.
+func (s *Server) handleDomainWhitelistSet(w http.ResponseWriter, r *http.Request) {
+	s.handleListSet(w, r, &s.conf.DomainWhitelist)
 }
 
-func (s *Server) handleListEndpoint(w http.ResponseWriter, r *http.Request, list *[]string) {
+// handleIPBlacklist handles the GET /control/ip_blacklist endpoint.
+func (s *Server) handleIPBlacklistGET(w http.ResponseWriter, r *http.Request) {
+	s.handleListGet(w, r, &s.conf.IPBlacklist)
+}
+
+// handleIPBlacklistSet handles the POST /control/ip_blacklist/set endpoint.
+func (s *Server) handleIPBlacklistSet(w http.ResponseWriter, r *http.Request) {
+	s.handleListSet(w, r, &s.conf.IPBlacklist)
+}
+
+// handleIPWhitelist handles the GET /control/ip_whitelist endpoint.
+func (s *Server) handleIPWhitelistGET(w http.ResponseWriter, r *http.Request) {
+	s.handleListGet(w, r, &s.conf.IPWhitelist)
+}
+
+// handleIPWhitelistSet handles the POST /control/ip_whitelist/set endpoint.
+func (s *Server) handleIPWhitelistSet(w http.ResponseWriter, r *http.Request) {
+	s.handleListSet(w, r, &s.conf.IPWhitelist)
+}
+
+func (s *Server) handleListGet(w http.ResponseWriter, r *http.Request, list *[]string) {
 	ctx := r.Context()
 	l := s.logger
 
-	switch r.Method {
-	case http.MethodGet:
-		resp := listGetResp{List: stringutil.CloneSliceOrEmpty(*list)}
-		aghhttp.WriteJSONResponseOK(ctx, l, w, r, &resp)
-	case http.MethodPost:
-		req := listSetReq{}
-		err := json.NewDecoder(r.Body).Decode(&req)
-		if err != nil {
-			aghhttp.ErrorAndLog(ctx, l, r, w, http.StatusBadRequest, "json decode: %s", err)
-			return
-		}
+	resp := listGetResp{List: stringutil.CloneSliceOrEmpty(*list)}
+	aghhttp.WriteJSONResponseOK(ctx, l, w, r, &resp)
+}
 
-		s.serverLock.Lock()
-		if req.Append {
-			existing := map[string]bool{}
-			for _, entry := range *list {
+func (s *Server) handleListSet(w http.ResponseWriter, r *http.Request, list *[]string) {
+	ctx := r.Context()
+	l := s.logger
+
+	req := listSetReq{}
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		aghhttp.ErrorAndLog(ctx, l, r, w, http.StatusBadRequest, "json decode: %s", err)
+		return
+	}
+
+	s.serverLock.Lock()
+	if req.Append {
+		existing := map[string]bool{}
+		for _, entry := range *list {
+			existing[entry] = true
+		}
+		for _, entry := range req.List {
+			if !existing[entry] {
+				*list = append(*list, entry)
 				existing[entry] = true
 			}
-			for _, entry := range req.List {
-				if !existing[entry] {
-					*list = append(*list, entry)
-					existing[entry] = true
-				}
-			}
-		} else {
-			*list = req.List
 		}
-		s.serverLock.Unlock()
-
-		s.conf.ConfModifier.Apply(ctx)
-
-		aghhttp.WriteJSONResponseOK(ctx, l, w, r, &listSetReq{List: *list})
-	default:
-		aghhttp.ErrorAndLog(ctx, l, r, w, http.StatusMethodNotAllowed, "method not allowed")
+	} else {
+		*list = req.List
 	}
+	s.serverLock.Unlock()
+
+	s.conf.ConfModifier.Apply(ctx)
+
+	aghhttp.WriteJSONResponseOK(ctx, l, w, r, &listSetReq{List: *list})
 }
 
 // registerHandlers registers web HTTP handlers.
@@ -916,14 +940,14 @@ func (s *Server) registerHandlers() {
 
 	s.conf.HTTPReg.Register(http.MethodPost, "/control/cache_clear", s.handleCacheClear)
 
-	s.conf.HTTPReg.Register(http.MethodGet, "/control/domain_blacklist", s.handleDomainBlacklist)
-	s.conf.HTTPReg.Register(http.MethodPost, "/control/domain_blacklist", s.handleDomainBlacklist)
-	s.conf.HTTPReg.Register(http.MethodGet, "/control/domain_whitelist", s.handleDomainWhitelist)
-	s.conf.HTTPReg.Register(http.MethodPost, "/control/domain_whitelist", s.handleDomainWhitelist)
-	s.conf.HTTPReg.Register(http.MethodGet, "/control/ip_blacklist", s.handleIPBlacklist)
-	s.conf.HTTPReg.Register(http.MethodPost, "/control/ip_blacklist", s.handleIPBlacklist)
-	s.conf.HTTPReg.Register(http.MethodGet, "/control/ip_whitelist", s.handleIPWhitelist)
-	s.conf.HTTPReg.Register(http.MethodPost, "/control/ip_whitelist", s.handleIPWhitelist)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/domain_blacklist", s.handleDomainBlacklistGET)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/domain_blacklist/set", s.handleDomainBlacklistSet)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/domain_whitelist", s.handleDomainWhitelistGET)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/domain_whitelist/set", s.handleDomainWhitelistSet)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/ip_blacklist", s.handleIPBlacklistGET)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/ip_blacklist/set", s.handleIPBlacklistSet)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/ip_whitelist", s.handleIPWhitelistGET)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/ip_whitelist/set", s.handleIPWhitelistSet)
 
 	webRegistered = true
 }

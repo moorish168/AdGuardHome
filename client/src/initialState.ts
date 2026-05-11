@@ -317,6 +317,7 @@ export type DnsConfigData = {
     dnssec_enabled: boolean;
     upstream_dns_file: string;
     upstream_dns: string;
+    trusted_upstream_dns: string;
     fallback_dns: string;
     bootstrap_dns: string;
     local_ptr_upstreams: string;
@@ -506,6 +507,7 @@ export const initialState: RootState = {
         dnssec_enabled: false,
         upstream_dns_file: '',
         upstream_dns: '',
+        trusted_upstream_dns: '',
         fallback_dns: '',
         bootstrap_dns: '',
         local_ptr_upstreams: '',

@@ -13,6 +13,7 @@ const Upstream = () => {
     const dispatch = useDispatch();
     const {
         upstream_dns,
+        trusted_upstream_dns,
         fallback_dns,
         bootstrap_dns,
         upstream_mode,
@@ -29,6 +30,7 @@ const Upstream = () => {
             fallback_dns,
             bootstrap_dns,
             upstream_dns,
+            trusted_upstream_dns,
             upstream_mode,
             resolve_clients,
             local_ptr_upstreams,
@@ -39,6 +41,7 @@ const Upstream = () => {
         const dnsConfig = {
             fallback_dns,
             bootstrap_dns,
+            trusted_upstream_dns,
             upstream_mode,
             resolve_clients,
             local_ptr_upstreams,
@@ -61,6 +64,7 @@ const Upstream = () => {
                     <Form
                         initialValues={{
                             upstream_dns: upstreamDns,
+                            trusted_upstream_dns,
                             fallback_dns,
                             bootstrap_dns,
                             upstream_mode,

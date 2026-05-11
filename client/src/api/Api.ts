@@ -699,7 +699,7 @@ class Api {
 
     // Trusted Filtering Lists
     DOMAIN_BLACKLIST = { path: 'domain_blacklist', method: 'GET' };
-    DOMAIN_BLACKLIST_SET = { path: 'domain_blacklist', method: 'POST' };
+    DOMAIN_BLACKLIST_SET = { path: 'domain_blacklist/set', method: 'POST' };
 
     getDomainBlacklist() {
         const { path, method } = this.DOMAIN_BLACKLIST;
@@ -712,7 +712,7 @@ class Api {
     }
 
     DOMAIN_WHITELIST = { path: 'domain_whitelist', method: 'GET' };
-    DOMAIN_WHITELIST_SET = { path: 'domain_whitelist', method: 'POST' };
+    DOMAIN_WHITELIST_SET = { path: 'domain_whitelist/set', method: 'POST' };
 
     getDomainWhitelist() {
         const { path, method } = this.DOMAIN_WHITELIST;
@@ -725,7 +725,7 @@ class Api {
     }
 
     IP_BLACKLIST = { path: 'ip_blacklist', method: 'GET' };
-    IP_BLACKLIST_SET = { path: 'ip_blacklist', method: 'POST' };
+    IP_BLACKLIST_SET = { path: 'ip_blacklist/set', method: 'POST' };
 
     getIPBlacklist() {
         const { path, method } = this.IP_BLACKLIST;
@@ -738,7 +738,7 @@ class Api {
     }
 
     IP_WHITELIST = { path: 'ip_whitelist', method: 'GET' };
-    IP_WHITELIST_SET = { path: 'ip_whitelist', method: 'POST' };
+    IP_WHITELIST_SET = { path: 'ip_whitelist/set', method: 'POST' };
 
     getIPWhitelist() {
         const { path, method } = this.IP_WHITELIST;
