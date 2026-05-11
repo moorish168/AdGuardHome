@@ -62,7 +62,7 @@ func (s *Server) processUpstreamAntiPollution(
 
 		return s.resolveWithGroup(ctx, l, dctx, untrusted)
 	default:
-		return s.processAntiPollutionSequential(ctx, l, dctx, trusted)
+		return s.processAntiPollutionSequential(ctx, l, dctx)
 	}
 }
 
@@ -84,7 +84,6 @@ func (s *Server) processAntiPollutionSequential(
 	ctx context.Context,
 	l *slog.Logger,
 	dctx *dnsContext,
-	trustedUps []upstream.Upstream,
 ) (rc resultCode) {
 	prx := s.proxy()
 	if prx == nil {
@@ -96,40 +95,31 @@ func (s *Server) processAntiPollutionSequential(
 	host := strings.TrimSuffix(dctx.proxyCtx.Req.Question[0].Name, ".")
 	prevCustom := dctx.proxyCtx.CustomUpstreamConfig
 
-	// Clone the request for the trusted query goroutine.  The trusted query
-	// uses upstream.ExchangeParallel directly to avoid the proxy's
-	// pendingRequests deduplication, which would otherwise merge the trusted
-	// query into the untrusted query and defeat the anti-pollution mechanism.
+	// Clone a minimal DNSContext for the trusted query goroutine.  The
+	// goroutine waits for untrustedDone before calling prx.Resolve, which
+	// avoids the proxy's pendingRequests deduplication with the untrusted
+	// query that runs on the main goroutine.
+	origCtx := dctx.proxyCtx
 	trustedCtx := &proxy.DNSContext{
-		Req: dctx.proxyCtx.Req.Copy(),
+		Req:                  origCtx.Req.Copy(),
+		Addr:                 origCtx.Addr,
+		Proto:                origCtx.Proto,
+		IsPrivateClient:      origCtx.IsPrivateClient,
+		RequestedPrivateRDNS: origCtx.RequestedPrivateRDNS,
+		CustomUpstreamConfig: s.apTrustedUC,
 	}
+
+	// untrustedDone signals the goroutine that the untrusted query has
+	// finished and prx.Resolve can safely be called.
+	untrustedDone := make(chan struct{})
 
 	// Channel for the trusted query result.  Buffered so the goroutine never
 	// blocks on send.
 	trustedCh := make(chan error, 1)
 
-	// Fire the trusted query in a goroutine so it runs in parallel with the
-	// untrusted query below.
 	go func() {
-		resp, resolvedUpstream, exchangeErr := upstream.ExchangeParallel(
-			trustedUps,
-			trustedCtx.Req,
-		)
-		if exchangeErr != nil {
-			trustedCh <- exchangeErr
-
-			return
-		}
-
-		// Some upstreams may respond without a question section.  See
-		// Proxy.handleExchangeResult.
-		if len(resp.Question) == 0 && len(trustedCtx.Req.Question) > 0 {
-			resp.Question = []dns.Question{trustedCtx.Req.Question[0]}
-		}
-
-		trustedCtx.Res = resp
-		trustedCtx.Upstream = resolvedUpstream
-		trustedCh <- nil
+		<-untrustedDone
+		trustedCh <- prx.Resolve(ctx, trustedCtx)
 	}()
 
 	// Query untrusted upstreams on the main goroutine, preserving the original
@@ -161,6 +151,8 @@ func (s *Server) processAntiPollutionSequential(
 			dctx.responseAD = dctx.proxyCtx.Res.AuthenticatedData
 			dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
+			close(untrustedDone)
+
 			return resultCodeSuccess
 		} else {
 			l.DebugContext(ctx, "anti-pollution: untrusted ip not in whitelist, waiting for trusted",
@@ -175,8 +167,9 @@ func (s *Server) processAntiPollutionSequential(
 		)
 	}
 
-	// Wait for the trusted query (which has been running in parallel since
-	// before the untrusted query started).
+	// Signal the goroutine to start the trusted query, then wait for it.
+	close(untrustedDone)
+
 	dctx.err = <-trustedCh
 
 	dctx.proxyCtx.CustomUpstreamConfig = prevCustom
