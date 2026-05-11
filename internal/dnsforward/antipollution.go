@@ -62,13 +62,20 @@ func (s *Server) processUpstreamAntiPollution(
 
 		return s.resolveWithGroup(ctx, l, dctx, untrusted)
 	default:
-		return s.processAntiPollutionSequential(ctx, l, dctx)
+		return s.processAntiPollutionSequential(ctx, l, dctx, trusted)
 	}
 }
 
-// processAntiPollutionSequential resolves by trying untrusted upstreams first
-// via prx.Resolve (which handles caching automatically), checking IP whitelist
-// and blacklist, then falling back to trusted upstreams if needed.
+// processAntiPollutionSequential resolves by querying untrusted and trusted
+// upstreams in parallel.  The trusted query is fired in a goroutine while the
+// untrusted query runs on the main goroutine.  When the untrusted response
+// arrives, its IPs are checked against the IP whitelist:
+//
+//   - If IPs match whitelist → use untrusted result immediately.
+//   - If IPs don't match → wait for the already-in-flight trusted query.
+//
+// This avoids the sequential latency of waiting for untrusted to complete
+// before even starting the trusted query.
 //
 // Each upstream group is queried at most once.  All results are cached by the
 // proxy so subsequent requests for the same domain are served from cache with
@@ -77,6 +84,7 @@ func (s *Server) processAntiPollutionSequential(
 	ctx context.Context,
 	l *slog.Logger,
 	dctx *dnsContext,
+	trustedUps []upstream.Upstream,
 ) (rc resultCode) {
 	prx := s.proxy()
 	if prx == nil {
@@ -86,10 +94,46 @@ func (s *Server) processAntiPollutionSequential(
 	}
 
 	host := strings.TrimSuffix(dctx.proxyCtx.Req.Question[0].Name, ".")
-
-	// Try untrusted upstreams first.  prx.Resolve will check the untrusted
-	// cache, and if it's a miss, query the upstream and cache the result.
 	prevCustom := dctx.proxyCtx.CustomUpstreamConfig
+
+	// Clone the request for the trusted query goroutine.  The trusted query
+	// uses upstream.ExchangeParallel directly to avoid the proxy's
+	// pendingRequests deduplication, which would otherwise merge the trusted
+	// query into the untrusted query and defeat the anti-pollution mechanism.
+	trustedCtx := &proxy.DNSContext{
+		Req: dctx.proxyCtx.Req.Copy(),
+	}
+
+	// Channel for the trusted query result.  Buffered so the goroutine never
+	// blocks on send.
+	trustedCh := make(chan error, 1)
+
+	// Fire the trusted query in a goroutine so it runs in parallel with the
+	// untrusted query below.
+	go func() {
+		resp, resolvedUpstream, exchangeErr := upstream.ExchangeParallel(
+			trustedUps,
+			trustedCtx.Req,
+		)
+		if exchangeErr != nil {
+			trustedCh <- exchangeErr
+
+			return
+		}
+
+		// Some upstreams may respond without a question section.  See
+		// Proxy.handleExchangeResult.
+		if len(resp.Question) == 0 && len(trustedCtx.Req.Question) > 0 {
+			resp.Question = []dns.Question{trustedCtx.Req.Question[0]}
+		}
+
+		trustedCtx.Res = resp
+		trustedCtx.Upstream = resolvedUpstream
+		trustedCh <- nil
+	}()
+
+	// Query untrusted upstreams on the main goroutine, preserving the original
+	// connection for writing the response.
 	dctx.proxyCtx.CustomUpstreamConfig = s.apUntrustedUC
 
 	if dctx.err = prx.Resolve(ctx, dctx.proxyCtx); dctx.err == nil {
@@ -100,7 +144,6 @@ func (s *Server) processAntiPollutionSequential(
 			"untrusted_ips", ipStrings(ips),
 		)
 
-		// IP blacklist has highest priority: blocked IPs are never returned.
 		if ipMatchesAny(ips, s.conf.IPBlacklist) {
 			l.DebugContext(ctx, "anti-pollution: untrusted response blocked (ip in blacklist)",
 				"host", host,
@@ -120,7 +163,7 @@ func (s *Server) processAntiPollutionSequential(
 
 			return resultCodeSuccess
 		} else {
-			l.DebugContext(ctx, "anti-pollution: untrusted ip not in whitelist, trying trusted",
+			l.DebugContext(ctx, "anti-pollution: untrusted ip not in whitelist, waiting for trusted",
 				"host", host,
 				"ips", ipStrings(ips),
 			)
@@ -132,23 +175,27 @@ func (s *Server) processAntiPollutionSequential(
 		)
 	}
 
+	// Wait for the trusted query (which has been running in parallel since
+	// before the untrusted query started).
+	dctx.err = <-trustedCh
+
 	dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
-	// Try trusted upstreams.
-	dctx.proxyCtx.CustomUpstreamConfig = s.apTrustedUC
-	if dctx.err = prx.Resolve(ctx, dctx.proxyCtx); dctx.err == nil {
+	if dctx.err == nil {
+		// Copy the trusted response into the original proxyCtx so the caller
+		// sees it as the final result.  Also copy Upstream so the query log
+		// correctly attributes the result to the trusted upstream.
+		dctx.proxyCtx.Res = trustedCtx.Res
+		dctx.proxyCtx.Upstream = trustedCtx.Upstream
+		dctx.responseFromUpstream = true
+		dctx.responseAD = trustedCtx.Res.AuthenticatedData
+
 		l.DebugContext(ctx, "anti-pollution: chose trusted",
 			"host", host,
 		)
 
-		dctx.responseFromUpstream = true
-		dctx.responseAD = dctx.proxyCtx.Res.AuthenticatedData
-		dctx.proxyCtx.CustomUpstreamConfig = prevCustom
-
 		return resultCodeSuccess
 	}
-
-	dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
 	l.DebugContext(ctx, "anti-pollution: both upstream groups failed",
 		"host", host,
