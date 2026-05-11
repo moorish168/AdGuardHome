@@ -1,0 +1,10 @@
+/container/mounts/add list=AdGuardHome src=docker/AdGuardHome/conf dst=/opt/adguardhome/conf
+/container/mounts/add list=AdGuardHome src=docker/AdGuardHome/work dst=/opt/adguardhome/work
+/container/add \
+    file=adguardhome-mikrotik-amd64.tar \
+    interface=veth1 \
+    root-dir=docker/AdGuardHome \
+    mountlists=AdGuardHome \
+    logging=yes \
+    start-on-boot=yes \
+    name=AdGuardHome
