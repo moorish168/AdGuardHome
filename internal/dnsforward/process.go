@@ -471,6 +471,10 @@ func (s *Server) processUpstream(
 
 	s.setCustomUpstream(ctx, l, pctx, dctx.clientID)
 
+	if s.conf.UpstreamMode == UpstreamModeAntiPollution {
+		return s.processUpstreamAntiPollution(ctx, l, dctx)
+	}
+
 	// Process the request further since it wasn't filtered.
 	prx := s.proxy()
 	if prx == nil {

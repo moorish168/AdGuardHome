@@ -696,6 +696,59 @@ class Api {
 
         return this.makeRequest(path, method);
     }
+
+    // Trusted Filtering Lists
+    DOMAIN_BLACKLIST = { path: 'domain_blacklist', method: 'GET' };
+    DOMAIN_BLACKLIST_SET = { path: 'domain_blacklist', method: 'POST' };
+
+    getDomainBlacklist() {
+        const { path, method } = this.DOMAIN_BLACKLIST;
+        return this.makeRequest(path, method);
+    }
+
+    setDomainBlacklist(data: { list: string[]; append?: boolean }) {
+        const { path, method } = this.DOMAIN_BLACKLIST_SET;
+        return this.makeRequest(path, method, { data });
+    }
+
+    DOMAIN_WHITELIST = { path: 'domain_whitelist', method: 'GET' };
+    DOMAIN_WHITELIST_SET = { path: 'domain_whitelist', method: 'POST' };
+
+    getDomainWhitelist() {
+        const { path, method } = this.DOMAIN_WHITELIST;
+        return this.makeRequest(path, method);
+    }
+
+    setDomainWhitelist(data: { list: string[]; append?: boolean }) {
+        const { path, method } = this.DOMAIN_WHITELIST_SET;
+        return this.makeRequest(path, method, { data });
+    }
+
+    IP_BLACKLIST = { path: 'ip_blacklist', method: 'GET' };
+    IP_BLACKLIST_SET = { path: 'ip_blacklist', method: 'POST' };
+
+    getIPBlacklist() {
+        const { path, method } = this.IP_BLACKLIST;
+        return this.makeRequest(path, method);
+    }
+
+    setIPBlacklist(data: { list: string[]; append?: boolean }) {
+        const { path, method } = this.IP_BLACKLIST_SET;
+        return this.makeRequest(path, method, { data });
+    }
+
+    IP_WHITELIST = { path: 'ip_whitelist', method: 'GET' };
+    IP_WHITELIST_SET = { path: 'ip_whitelist', method: 'POST' };
+
+    getIPWhitelist() {
+        const { path, method } = this.IP_WHITELIST;
+        return this.makeRequest(path, method);
+    }
+
+    setIPWhitelist(data: { list: string[]; append?: boolean }) {
+        const { path, method } = this.IP_WHITELIST_SET;
+        return this.makeRequest(path, method, { data });
+    }
 }
 
 const apiClient = new Api();

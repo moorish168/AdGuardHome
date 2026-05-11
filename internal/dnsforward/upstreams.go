@@ -153,6 +153,8 @@ func setProxyUpstreamMode(
 		conf.FastestPingTimeout = fastestTimeout
 	case UpstreamModeLoadBalance:
 		conf.UpstreamMode = proxy.UpstreamModeLoadBalance
+	case UpstreamModeAntiPollution:
+		conf.UpstreamMode = proxy.UpstreamModeParallel
 	default:
 		return fmt.Errorf("unexpected value %q", upstreamMode)
 	}

@@ -758,5 +758,21 @@
   "version_request_error": "Update check failed. Please check your Internet connection.",
   "wednesday": "Wednesday",
   "wednesday_short": "Wed",
-  "whois": "WHOIS"
+  "whois": "WHOIS",
+  "trusted_filtering": "Trusted Filtering",
+  "domain_blacklist_title": "Domain Blacklist",
+  "domain_blacklist_desc": "Configure a domain blacklist. DNS query results matching these domains will be blocked. One domain per line, wildcards supported (e.g. *.example.org).",
+  "domain_blacklist_placeholder": "Enter domains, one per line...",
+  "domain_whitelist_title": "Domain Whitelist",
+  "domain_whitelist_desc": "Configure a domain whitelist. DNS queries matching these domains will bypass even if they match the blacklist. One domain per line, wildcards supported (e.g. *.example.org).",
+  "domain_whitelist_placeholder": "Enter domains, one per line...",
+  "ip_blacklist_title": "IP Blacklist",
+  "ip_blacklist_desc": "Configure an IP blacklist. Upstream DNS results containing these IP addresses will be discarded. One IP or CIDR per line (e.g. 192.168.1.0/24).",
+  "ip_blacklist_placeholder": "Enter IP or CIDR, one per line...",
+  "ip_whitelist_title": "IP Whitelist",
+  "ip_whitelist_desc": "Configure an IP whitelist. Upstream DNS results containing these IP addresses will be preferred. One IP or CIDR per line (e.g. 192.168.1.0/24).",
+  "ip_whitelist_placeholder": "Enter IP or CIDR, one per line...",
+  "upload_file": "Upload File",
+  "anti_pollution_mode": "Anti-Pollution",
+  "anti_pollution_mode_desc": "Query both trusted and untrusted upstreams. Apply domain blacklist/whitelist and IP blacklist/whitelist rules to select the best result and avoid DNS pollution."
 }

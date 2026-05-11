@@ -1,5 +1,6 @@
 {
   "all_right": {
+    "trusted_upstream_dns": [],
     "upstream_dns": [
       "8.8.8.8:53",
       "8.8.4.4:53"
@@ -41,6 +42,7 @@
     "edns_cs_custom_ip": ""
   },
   "fastest_addr": {
+    "trusted_upstream_dns": [],
     "upstream_dns": [
       "8.8.8.8:53",
       "8.8.4.4:53"
@@ -82,6 +84,7 @@
     "edns_cs_custom_ip": ""
   },
   "parallel": {
+    "trusted_upstream_dns": [],
     "upstream_dns": [
       "8.8.8.8:53",
       "8.8.4.4:53"

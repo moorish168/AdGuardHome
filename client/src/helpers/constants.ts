@@ -157,6 +157,13 @@ export const FILTERS_URLS = {
     blocked_services: '/blocked_services',
 };
 
+export const TRUSTED_FILTERS_URLS = {
+    domain_blacklist: '/domain_blacklist',
+    domain_whitelist: '/domain_whitelist',
+    ip_blacklist: '/ip_blacklist',
+    ip_whitelist: '/ip_whitelist',
+};
+
 export const ENCRYPTION_SOURCE = {
     PATH: 'path',
     CONTENT: 'content',
@@ -392,6 +399,7 @@ export const DNS_REQUEST_OPTIONS = {
     PARALLEL: 'parallel',
     FASTEST_ADDR: 'fastest_addr',
     LOAD_BALANCING: 'load_balance',
+    ANTI_POLLUTION: 'anti_pollution',
 };
 
 export const DHCP_FORM_NAMES = {

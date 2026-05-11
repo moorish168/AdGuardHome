@@ -33,6 +33,10 @@ type jsonDNSConfig struct {
 	// Upstreams is the list of upstream DNS servers.
 	Upstreams *[]string `json:"upstream_dns"`
 
+	// TrustedUpstreams is the list of upstream DNS servers explicitly marked
+	// as trusted.
+	TrustedUpstreams *[]string `json:"trusted_upstream_dns"`
+
 	// UpstreamsFile is the file containing upstream DNS servers.
 	UpstreamsFile *string `json:"upstream_dns_file"`
 
@@ -137,9 +141,10 @@ const (
 	// Deprecated: Use jsonUpstreamModeLoadBalance instead.
 	jsonUpstreamModeEmpty jsonUpstreamMode = ""
 
-	jsonUpstreamModeLoadBalance jsonUpstreamMode = "load_balance"
-	jsonUpstreamModeParallel    jsonUpstreamMode = "parallel"
-	jsonUpstreamModeFastestAddr jsonUpstreamMode = "fastest_addr"
+	jsonUpstreamModeLoadBalance   jsonUpstreamMode = "load_balance"
+	jsonUpstreamModeParallel      jsonUpstreamMode = "parallel"
+	jsonUpstreamModeFastestAddr   jsonUpstreamMode = "fastest_addr"
+	jsonUpstreamModeAntiPollution jsonUpstreamMode = "anti_pollution"
 )
 
 func (s *Server) getDNSConfig(ctx context.Context) (c *jsonDNSConfig) {
@@ -149,6 +154,7 @@ func (s *Server) getDNSConfig(ctx context.Context) (c *jsonDNSConfig) {
 	defer s.serverLock.RUnlock()
 
 	upstreams := stringutil.CloneSliceOrEmpty(s.conf.UpstreamDNS)
+	trustedUpstreams := stringutil.CloneSliceOrEmpty(s.conf.TrustedUpstreamDNS)
 	upstreamFile := s.conf.UpstreamDNSFileName
 	bootstraps := stringutil.CloneSliceOrEmpty(s.conf.BootstrapDNS)
 	fallbacks := stringutil.CloneSliceOrEmpty(s.conf.FallbackDNS)
@@ -185,6 +191,8 @@ func (s *Server) getDNSConfig(ctx context.Context) (c *jsonDNSConfig) {
 		upstreamMode = jsonUpstreamModeParallel
 	case UpstreamModeFastestAddr:
 		upstreamMode = jsonUpstreamModeFastestAddr
+	case UpstreamModeAntiPollution:
+		upstreamMode = jsonUpstreamModeAntiPollution
 	}
 
 	defPTRUps, err := s.defaultLocalPTRUpstreams(ctx)
@@ -194,6 +202,7 @@ func (s *Server) getDNSConfig(ctx context.Context) (c *jsonDNSConfig) {
 
 	return &jsonDNSConfig{
 		Upstreams:                &upstreams,
+		TrustedUpstreams:         &trustedUpstreams,
 		UpstreamsFile:            &upstreamFile,
 		Bootstraps:               &bootstraps,
 		Fallbacks:                &fallbacks,
@@ -272,7 +281,8 @@ func (req *jsonDNSConfig) checkUpstreamMode() (err error) {
 		jsonUpstreamModeEmpty,
 		jsonUpstreamModeLoadBalance,
 		jsonUpstreamModeParallel,
-		jsonUpstreamModeFastestAddr:
+		jsonUpstreamModeFastestAddr,
+		jsonUpstreamModeAntiPollution:
 		return nil
 	default:
 		return fmt.Errorf("upstream_mode: incorrect value %q", um)
@@ -625,6 +635,8 @@ func mustParseUpstreamMode(mode jsonUpstreamMode) (um UpstreamMode) {
 		return UpstreamModeParallel
 	case jsonUpstreamModeFastestAddr:
 		return UpstreamModeFastestAddr
+	case jsonUpstreamModeAntiPollution:
+		return UpstreamModeAntiPollution
 	default:
 		// Should never happen, since the value should be validated.
 		panic(fmt.Errorf("unexpected upstream mode: %q", mode))
@@ -652,6 +664,7 @@ func setIfNotNil[T any](currentPtr, newPtr *T) (hasSet bool) {
 func (s *Server) setConfigRestartable(dc *jsonDNSConfig) (shouldRestart bool) {
 	for _, hasSet := range []bool{
 		setIfNotNil(&s.conf.UpstreamDNS, dc.Upstreams),
+		setIfNotNil(&s.conf.TrustedUpstreamDNS, dc.TrustedUpstreams),
 		setIfNotNil(&s.conf.LocalPTRResolvers, dc.LocalPTRUpstreams),
 		setIfNotNil(&s.conf.UpstreamDNSFileName, dc.UpstreamsFile),
 		setIfNotNil(&s.conf.BootstrapDNS, dc.Bootstraps),
@@ -819,6 +832,74 @@ func (s *Server) handleSetProtection(w http.ResponseWriter, r *http.Request) {
 	aghhttp.OK(ctx, l, w)
 }
 
+// listGetResp is the response for list GET endpoints.
+type listGetResp struct {
+	List []string `json:"list"`
+}
+
+// listSetReq is the request for list POST endpoints.
+type listSetReq struct {
+	List   []string `json:"list"`
+	Append bool     `json:"append"`
+}
+
+func (s *Server) handleDomainBlacklist(w http.ResponseWriter, r *http.Request) {
+	s.handleListEndpoint(w, r, &s.conf.DomainBlacklist)
+}
+
+func (s *Server) handleDomainWhitelist(w http.ResponseWriter, r *http.Request) {
+	s.handleListEndpoint(w, r, &s.conf.DomainWhitelist)
+}
+
+func (s *Server) handleIPBlacklist(w http.ResponseWriter, r *http.Request) {
+	s.handleListEndpoint(w, r, &s.conf.IPBlacklist)
+}
+
+func (s *Server) handleIPWhitelist(w http.ResponseWriter, r *http.Request) {
+	s.handleListEndpoint(w, r, &s.conf.IPWhitelist)
+}
+
+func (s *Server) handleListEndpoint(w http.ResponseWriter, r *http.Request, list *[]string) {
+	ctx := r.Context()
+	l := s.logger
+
+	switch r.Method {
+	case http.MethodGet:
+		resp := listGetResp{List: stringutil.CloneSliceOrEmpty(*list)}
+		aghhttp.WriteJSONResponseOK(ctx, l, w, r, &resp)
+	case http.MethodPost:
+		req := listSetReq{}
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
+			aghhttp.ErrorAndLog(ctx, l, r, w, http.StatusBadRequest, "json decode: %s", err)
+			return
+		}
+
+		s.serverLock.Lock()
+		if req.Append {
+			existing := map[string]bool{}
+			for _, entry := range *list {
+				existing[entry] = true
+			}
+			for _, entry := range req.List {
+				if !existing[entry] {
+					*list = append(*list, entry)
+					existing[entry] = true
+				}
+			}
+		} else {
+			*list = req.List
+		}
+		s.serverLock.Unlock()
+
+		s.conf.ConfModifier.Apply(ctx)
+
+		aghhttp.WriteJSONResponseOK(ctx, l, w, r, &listSetReq{List: *list})
+	default:
+		aghhttp.ErrorAndLog(ctx, l, r, w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
 // registerHandlers registers web HTTP handlers.
 func (s *Server) registerHandlers() {
 	if webRegistered || s.conf.HTTPReg == nil {
@@ -834,6 +915,15 @@ func (s *Server) registerHandlers() {
 	s.conf.HTTPReg.Register(http.MethodPost, "/control/access/set", s.handleAccessSet)
 
 	s.conf.HTTPReg.Register(http.MethodPost, "/control/cache_clear", s.handleCacheClear)
+
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/domain_blacklist", s.handleDomainBlacklist)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/domain_blacklist", s.handleDomainBlacklist)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/domain_whitelist", s.handleDomainWhitelist)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/domain_whitelist", s.handleDomainWhitelist)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/ip_blacklist", s.handleIPBlacklist)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/ip_blacklist", s.handleIPBlacklist)
+	s.conf.HTTPReg.Register(http.MethodGet, "/control/ip_whitelist", s.handleIPWhitelist)
+	s.conf.HTTPReg.Register(http.MethodPost, "/control/ip_whitelist", s.handleIPWhitelist)
 
 	webRegistered = true
 }

@@ -5,7 +5,7 @@ import { NavLink } from 'react-router-dom';
 import enhanceWithClickOutside from 'react-click-outside';
 import classnames from 'classnames';
 import { Trans, withTranslation } from 'react-i18next';
-import { SETTINGS_URLS, FILTERS_URLS, MENU_URLS } from '../../helpers/constants';
+import { SETTINGS_URLS, FILTERS_URLS, MENU_URLS, TRUSTED_FILTERS_URLS } from '../../helpers/constants';
 
 import Dropdown from '../ui/Dropdown';
 
@@ -22,17 +22,19 @@ const MENU_ITEMS = [
 
     // Filters dropdown should have visual order 2
 
+    // Trusted Filters dropdown should have visual order 3
+
     {
         route: MENU_URLS.logs,
         icon: 'log',
         text: 'query_log',
-        order: 3,
+        order: 4,
     },
     {
         route: MENU_URLS.guide,
         icon: 'setup',
         text: 'setup_guide',
-        order: 4,
+        order: 5,
     },
 ];
 
@@ -79,6 +81,25 @@ const FILTERS_ITEMS = [
     {
         route: FILTERS_URLS.custom_rules,
         text: 'custom_filtering_rules',
+    },
+];
+
+const TRUSTED_FILTERS_ITEMS = [
+    {
+        route: TRUSTED_FILTERS_URLS.domain_blacklist,
+        text: 'domain_blacklist_title',
+    },
+    {
+        route: TRUSTED_FILTERS_URLS.domain_whitelist,
+        text: 'domain_whitelist_title',
+    },
+    {
+        route: TRUSTED_FILTERS_URLS.ip_blacklist,
+        text: 'ip_blacklist_title',
+    },
+    {
+        route: TRUSTED_FILTERS_URLS.ip_whitelist,
+        text: 'ip_whitelist_title',
     },
 ];
 
@@ -175,6 +196,16 @@ class Menu extends Component<MenuProps> {
                                 icon: 'filters',
                                 URLS: FILTERS_URLS,
                                 ITEMS: FILTERS_ITEMS,
+                            })}
+                        </li>
+
+                        <li className="nav-item order-3">
+                            {this.getDropdown({
+                                order: 3,
+                                label: 'trusted_filtering',
+                                icon: 'filters',
+                                URLS: TRUSTED_FILTERS_URLS,
+                                ITEMS: TRUSTED_FILTERS_ITEMS,
                             })}
                         </li>
                     </ul>

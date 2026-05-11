@@ -92,6 +92,11 @@ const Form = ({ initialValues, onSubmit }: FormProps) => {
             desc: <Trans components={{ br: <br />, b: <b /> }}>fastest_addr_desc</Trans>,
             value: DNS_REQUEST_OPTIONS.FASTEST_ADDR,
         },
+        {
+            label: t('anti_pollution_mode'),
+            desc: <Trans components={{ br: <br />, b: <b /> }}>anti_pollution_mode_desc</Trans>,
+            value: DNS_REQUEST_OPTIONS.ANTI_POLLUTION,
+        },
     ];
 
     return (

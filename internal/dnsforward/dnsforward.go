@@ -564,6 +564,27 @@ func (s *Server) prepareUpstreamSettings(ctx context.Context, boot upstream.Reso
 		return fmt.Errorf("preparing upstream config: %w", err)
 	}
 
+	trustedUpstreams := stringutil.FilterOut(s.conf.TrustedUpstreamDNS, aghnet.IsCommentOrEmpty)
+	if len(trustedUpstreams) > 0 {
+		var trustedUC *proxy.UpstreamConfig
+		trustedUC, err = proxy.ParseUpstreamsConfig(trustedUpstreams, &upstream.Options{
+			Logger:       aghslog.NewForUpstream(s.baseLogger, aghslog.UpstreamTypeMain),
+			Bootstrap:    boot,
+			Timeout:      s.conf.UpstreamTimeout,
+			HTTPVersions: aghnet.UpstreamHTTPVersions(s.conf.UseHTTP3Upstreams),
+			PreferIPv6:   s.conf.BootstrapPreferIPv6,
+			RootCAs:      s.conf.TLSv12Roots,
+			CipherSuites: s.conf.TLSCiphers,
+		})
+		if err != nil {
+			return fmt.Errorf("preparing trusted upstream config: %w", err)
+		}
+
+		for _, u := range trustedUC.Upstreams {
+			uc.Upstreams = append(uc.Upstreams, NewTrustedUpstream(u, true))
+		}
+	}
+
 	s.conf.UpstreamConfig = uc
 	s.conf.ClientsContainer.UpdateCommonUpstreamConfig(&client.CommonUpstreamConfig{
 		Bootstrap:               boot,

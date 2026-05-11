@@ -66,6 +66,25 @@ type Config struct {
 	// UpstreamDNS is the list of upstream DNS servers.
 	UpstreamDNS []string `yaml:"upstream_dns"`
 
+	// TrustedUpstreamDNS is the list of upstream DNS servers that are
+	// explicitly trusted.  Results from these upstreams should be preferred
+	// over results from untrusted upstreams.
+	TrustedUpstreamDNS []string `yaml:"trusted_upstream_dns"`
+
+	// DomainBlacklist is the list of domain names to be blocked at the DNS
+	// level.
+	DomainBlacklist []string `yaml:"domain_blacklist"`
+
+	// DomainWhitelist is the list of domain names that should bypass blocking.
+	DomainWhitelist []string `yaml:"domain_whitelist"`
+
+	// IPBlacklist is the list of IP addresses or CIDRs to be blocked.
+	IPBlacklist []string `yaml:"ip_blacklist"`
+
+	// IPWhitelist is the list of IP addresses or CIDRs that should bypass
+	// blocking.
+	IPWhitelist []string `yaml:"ip_whitelist"`
+
 	// UpstreamDNSFileName, if set, points to the file which contains upstream
 	// DNS servers.
 	UpstreamDNSFileName string `yaml:"upstream_dns_file"`
@@ -320,9 +339,10 @@ type ServerConfig struct {
 type UpstreamMode string
 
 const (
-	UpstreamModeLoadBalance UpstreamMode = "load_balance"
-	UpstreamModeParallel    UpstreamMode = "parallel"
-	UpstreamModeFastestAddr UpstreamMode = "fastest_addr"
+	UpstreamModeLoadBalance   UpstreamMode = "load_balance"
+	UpstreamModeParallel      UpstreamMode = "parallel"
+	UpstreamModeFastestAddr   UpstreamMode = "fastest_addr"
+	UpstreamModeAntiPollution UpstreamMode = "anti_pollution"
 )
 
 // newProxyConfig creates and validates configuration for the main proxy.

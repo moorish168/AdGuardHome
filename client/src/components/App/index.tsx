@@ -20,7 +20,7 @@ import Icons from '../ui/Icons';
 import i18n from '../../i18n';
 
 import Loading from '../ui/Loading';
-import { FILTERS_URLS, MENU_URLS, SETTINGS_URLS, THEMES } from '../../helpers/constants';
+import { FILTERS_URLS, MENU_URLS, SETTINGS_URLS, THEMES, TRUSTED_FILTERS_URLS } from '../../helpers/constants';
 
 import { getLogsUrlParams, setHtmlLangAttr, setUITheme } from '../../helpers/helpers';
 
@@ -40,6 +40,11 @@ import DnsBlocklist from '../../containers/DnsBlocklist';
 import DnsAllowlist from '../../containers/DnsAllowlist';
 import DnsRewrites from '../../containers/DnsRewrites';
 import CustomRules from '../../containers/CustomRules';
+
+import DomainBlacklist from '../../containers/DomainBlacklist';
+import DomainWhitelist from '../../containers/DomainWhitelist';
+import IPBlacklist from '../../containers/IPBlacklist';
+import IPWhitelist from '../../containers/IPWhitelist';
 
 import Services from '../Filters/Services';
 
@@ -100,6 +105,22 @@ const ROUTES = [
     {
         path: FILTERS_URLS.blocked_services,
         component: Services,
+    },
+    {
+        path: TRUSTED_FILTERS_URLS.domain_blacklist,
+        component: DomainBlacklist,
+    },
+    {
+        path: TRUSTED_FILTERS_URLS.domain_whitelist,
+        component: DomainWhitelist,
+    },
+    {
+        path: TRUSTED_FILTERS_URLS.ip_blacklist,
+        component: IPBlacklist,
+    },
+    {
+        path: TRUSTED_FILTERS_URLS.ip_whitelist,
+        component: IPWhitelist,
     },
 ];
 
