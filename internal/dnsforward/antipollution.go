@@ -2,7 +2,6 @@ package dnsforward
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/netip"
 	"strings"
@@ -13,17 +12,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-// processUpstreamAntiPollution handles upstream resolution in anti-pollution
-// mode.  It splits upstreams into trusted and untrusted groups, matches the
-// domain against blacklist/whitelist, and applies IP-level filtering to choose
-// the best result.
-//
-// The decision is made in a single pass with no retry loops, guaranteeing that
-// the response never oscillates between trusted and untrusted upstreams.
-//
-// When the decision requires a trusted result but no trusted upstream is
-// reachable, a SERVFAIL is returned to the client instead of falling back to
-// possibly polluted untrusted data.
 func (s *Server) processUpstreamAntiPollution(
 	ctx context.Context,
 	l *slog.Logger,
@@ -37,6 +25,8 @@ func (s *Server) processUpstreamAntiPollution(
 
 	ups := s.effectiveUpstreamsForAP(pctx)
 	if len(ups) == 0 {
+		l.DebugContext(ctx, "anti-pollution: no effective upstreams, falling back to normal resolution")
+
 		return s.resolveNormally(ctx, l, dctx)
 	}
 
@@ -50,6 +40,8 @@ func (s *Server) processUpstreamAntiPollution(
 	if len(untrusted) == 0 {
 		return s.resolveWithGroup(ctx, l, dctx, trusted)
 	}
+
+	s.ensureAPCaches()
 
 	inBlacklist := domainMatchesWildcard(host, s.conf.DomainBlacklist)
 	inWhitelist := domainMatchesWildcard(host, s.conf.DomainWhitelist)
@@ -70,149 +62,153 @@ func (s *Server) processUpstreamAntiPollution(
 
 		return s.resolveWithGroup(ctx, l, dctx, untrusted)
 	default:
-		return s.processAntiPollutionBoth(ctx, l, dctx, trusted, untrusted)
+		return s.processAntiPollutionSequential(ctx, l, dctx)
 	}
 }
 
-// processAntiPollutionBoth queries both trusted and untrusted upstreams in
-// parallel, then applies the rule:
+// processAntiPollutionSequential resolves by trying untrusted upstreams first
+// via prx.Resolve (which handles caching automatically), checking IP whitelist
+// and blacklist, then falling back to trusted upstreams if needed.
 //
-//   - IP matches whitelist → use untrusted (confirmed safe)
-//   - Everything else       → use trusted  (assume polluted)
-//   - Trusted unreachable   → return error, NEVER fall back to untrusted
-func (s *Server) processAntiPollutionBoth(
+// Each upstream group is queried at most once.  All results are cached by the
+// proxy so subsequent requests for the same domain are served from cache with
+// zero upstream latency.
+func (s *Server) processAntiPollutionSequential(
 	ctx context.Context,
 	l *slog.Logger,
 	dctx *dnsContext,
-	trusted, untrusted []upstream.Upstream,
 ) (rc resultCode) {
-	req := dctx.proxyCtx.Req
-	host := strings.TrimSuffix(req.Question[0].Name, ".")
+	prx := s.proxy()
+	if prx == nil {
+		dctx.err = srvClosedErr
 
-	type exchangeResult struct {
-		resp *dns.Msg
-		u    upstream.Upstream
-		err  error
+		return resultCodeError
 	}
 
-	var (
-		trustedRes   exchangeResult
-		untrustedRes exchangeResult
-	)
+	host := strings.TrimSuffix(dctx.proxyCtx.Req.Question[0].Name, ".")
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// Try untrusted upstreams first.  prx.Resolve will check the untrusted
+	// cache, and if it's a miss, query the upstream and cache the result.
+	prevCustom := dctx.proxyCtx.CustomUpstreamConfig
+	dctx.proxyCtx.CustomUpstreamConfig = s.apUntrustedUC
 
-	go func() {
-		defer wg.Done()
-		trustedRes.resp, trustedRes.u, trustedRes.err = exchangeWithUpstreams(trusted, req)
-	}()
-
-	go func() {
-		defer wg.Done()
-		untrustedRes.resp, untrustedRes.u, untrustedRes.err = exchangeWithUpstreams(untrusted, req)
-	}()
-
-	wg.Wait()
-
-	if trustedRes.err != nil {
-		l.DebugContext(ctx, "anti-pollution: trusted exchange failed",
-			"err", trustedRes.err,
-		)
-	}
-	if untrustedRes.err != nil {
-		l.DebugContext(ctx, "anti-pollution: untrusted exchange failed",
-			"err", untrustedRes.err,
-		)
-	}
-
-	trustedOK := trustedRes.resp != nil
-	untrustedOK := untrustedRes.resp != nil
-
-	if untrustedOK && trustedOK {
-		ips := extractIPsFromMsg(untrustedRes.resp)
-		ipInWhitelist := ipMatchesAny(ips, s.conf.IPWhitelist)
-		ipInBlacklist := ipMatchesAny(ips, s.conf.IPBlacklist)
+	if dctx.err = prx.Resolve(ctx, dctx.proxyCtx); dctx.err == nil {
+		ips := extractIPsFromMsg(dctx.proxyCtx.Res)
 
 		l.DebugContext(ctx, "anti-pollution ip filter",
 			"host", host,
 			"untrusted_ips", ipStrings(ips),
-			"ip_in_whitelist", ipInWhitelist,
-			"ip_in_blacklist", ipInBlacklist,
 		)
 
-		if ipInWhitelist {
-			l.DebugContext(ctx, "anti-pollution: chose untrusted (ip in whitelist)")
+		// IP blacklist has highest priority: blocked IPs are never returned.
+		if ipMatchesAny(ips, s.conf.IPBlacklist) {
+			l.DebugContext(ctx, "anti-pollution: untrusted response blocked (ip in blacklist)",
+				"host", host,
+				"ips", ipStrings(ips),
+			)
 
-			s.setResponse(dctx, untrustedRes.resp, untrustedRes.u)
+			// Fall through to trusted.
+		} else if ipMatchesAny(ips, s.conf.IPWhitelist) {
+			l.DebugContext(ctx, "anti-pollution: chose untrusted (ip in whitelist)",
+				"host", host,
+				"ips", ipStrings(ips),
+			)
+
+			dctx.responseFromUpstream = true
+			dctx.responseAD = dctx.proxyCtx.Res.AuthenticatedData
+			dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
 			return resultCodeSuccess
+		} else {
+			l.DebugContext(ctx, "anti-pollution: untrusted ip not in whitelist, trying trusted",
+				"host", host,
+				"ips", ipStrings(ips),
+			)
 		}
+	} else {
+		l.DebugContext(ctx, "anti-pollution: untrusted exchange failed",
+			"host", host,
+			"err", dctx.err,
+		)
+	}
 
-		l.DebugContext(ctx, "anti-pollution: chose trusted (ip not in whitelist)")
+	dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
-		s.setResponse(dctx, trustedRes.resp, trustedRes.u)
+	// Try trusted upstreams.
+	dctx.proxyCtx.CustomUpstreamConfig = s.apTrustedUC
+	if dctx.err = prx.Resolve(ctx, dctx.proxyCtx); dctx.err == nil {
+		l.DebugContext(ctx, "anti-pollution: chose trusted",
+			"host", host,
+		)
+
+		dctx.responseFromUpstream = true
+		dctx.responseAD = dctx.proxyCtx.Res.AuthenticatedData
+		dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
 		return resultCodeSuccess
 	}
 
-	// Non-whitelist, only trusted available.
-	if trustedOK {
-		l.DebugContext(ctx, "anti-pollution: chose trusted (only trusted reached)")
+	dctx.proxyCtx.CustomUpstreamConfig = prevCustom
 
-		s.setResponse(dctx, trustedRes.resp, trustedRes.u)
-
-		return resultCodeSuccess
-	}
-
-	// Only untrusted available, trusted is unreachable.
-	// Return error — NEVER use untrusted alone to avoid cache pollution.
-	if untrustedOK {
-		l.DebugContext(ctx, "anti-pollution: blocking response, trusted unreachable, refusing to use untrusted alone")
-	}
-
-	dctx.err = fmt.Errorf(
-		"anti-pollution failed: trusted unreachable (trusted: %w, untrusted: %w)",
-		trustedRes.err,
-		untrustedRes.err,
+	l.DebugContext(ctx, "anti-pollution: both upstream groups failed",
+		"host", host,
 	)
 
 	return resultCodeError
 }
 
-// antiPollutionBlock responds with SERVFAIL when the anti-pollution logic
-// determines that a trusted upstream result is required but none is available.
-// This prevents the client from caching a potentially polluted response from an
-// untrusted upstream.
-func (s *Server) antiPollutionBlock(
-	ctx context.Context,
-	l *slog.Logger,
-	dctx *dnsContext,
-	reason string,
-) {
-	l.WarnContext(ctx, "anti-pollution: blocked response to prevent pollution",
-		"reason", reason,
-		"question", dctx.proxyCtx.Req.Question[0].Name,
-	)
+// ensureAPCaches initializes the persistent CustomUpstreamConfig instances for
+// anti-pollution mode.  They hold independent caches so repeated queries for
+// the same domain are served from memory without contacting the upstream.
+//
+// Must be called with s.serverLock held to avoid racing with Reconfigure.
+func (s *Server) ensureAPCaches() {
+	if s.apTrustedUC != nil {
+		return
+	}
 
-	dctx.proxyCtx.Res = s.NewMsgSERVFAIL(dctx.proxyCtx.Req)
-	dctx.responseFromUpstream = false
-}
+	s.serverLock.Lock()
+	defer s.serverLock.Unlock()
 
-// setResponse sets the DNS response on dctx from the given upstream result.
-func (s *Server) setResponse(dctx *dnsContext, resp *dns.Msg, u upstream.Upstream) {
-	dctx.proxyCtx.Res = resp
-	dctx.proxyCtx.Upstream = u
-	dctx.responseFromUpstream = true
-	dctx.responseAD = resp.AuthenticatedData
+	if s.apTrustedUC != nil {
+		return
+	}
+
+	// Read config while holding the lock to avoid racing with Reconfigure.
+	cfg := s.conf
+	if cfg.UpstreamConfig == nil {
+		return
+	}
+
+	trustedUps, untrustedUps := splitUpstreamsByTrust(cfg.UpstreamConfig.Upstreams)
+
+	ednsEnabled := false
+	if cfg.EDNSClientSubnet != nil {
+		ednsEnabled = cfg.EDNSClientSubnet.Enabled
+	}
+
+	if len(trustedUps) > 0 {
+		s.apTrustedUC = proxy.NewCustomUpstreamConfig(
+			&proxy.UpstreamConfig{Upstreams: trustedUps},
+			cfg.CacheEnabled,
+			int(cfg.CacheSize),
+			ednsEnabled,
+		)
+	}
+
+	if len(untrustedUps) > 0 {
+		s.apUntrustedUC = proxy.NewCustomUpstreamConfig(
+			&proxy.UpstreamConfig{Upstreams: untrustedUps},
+			cfg.CacheEnabled,
+			int(cfg.CacheSize),
+			ednsEnabled,
+		)
+	}
 }
 
 // resolveWithGroup routes resolution through the built-in proxy path, using
-// only the given upstreams.  This ensures the proxy's caching, fallback, and
-// stats mechanisms operate normally.
-//
-// CustomUpstreamConfig is set on the proxyCtx for the duration of this call
-// and restored afterwards to avoid leaking state between requests.
+// the persistent CustomUpstreamConfig with a shared cache.  The result is
+// cached and subsequent requests for the same domain are served from cache.
 func (s *Server) resolveWithGroup(
 	ctx context.Context,
 	_ *slog.Logger,
@@ -226,23 +222,15 @@ func (s *Server) resolveWithGroup(
 		return resultCodeError
 	}
 
+	var customUC *proxy.CustomUpstreamConfig
+	if len(ups) > 0 && UpstreamTrusted(ups[0]) {
+		customUC = s.apTrustedUC
+	} else {
+		customUC = s.apUntrustedUC
+	}
+
 	prevCustom := dctx.proxyCtx.CustomUpstreamConfig
-
-	customUC := &proxy.UpstreamConfig{
-		Upstreams: ups,
-	}
-
-	ednsEnabled := false
-	if s.conf.EDNSClientSubnet != nil {
-		ednsEnabled = s.conf.EDNSClientSubnet.Enabled
-	}
-
-	dctx.proxyCtx.CustomUpstreamConfig = proxy.NewCustomUpstreamConfig(
-		customUC,
-		s.conf.CacheEnabled,
-		int(s.conf.CacheSize),
-		ednsEnabled,
-	)
+	dctx.proxyCtx.CustomUpstreamConfig = customUC
 
 	if dctx.err = prx.Resolve(ctx, dctx.proxyCtx); dctx.err != nil {
 		dctx.proxyCtx.CustomUpstreamConfig = prevCustom
@@ -287,12 +275,16 @@ func splitUpstreamsByTrust(ups []upstream.Upstream) (trusted, untrusted []upstre
 	return trusted, untrusted
 }
 
-// resolveNormally falls back to normal proxy resolution.
+// resolveNormally falls back to normal proxy resolution.  This path is taken
+// when the client has a custom upstream config that overrides the global
+// anti-pollution settings.
 func (s *Server) resolveNormally(
 	ctx context.Context,
-	_ *slog.Logger,
+	l *slog.Logger,
 	dctx *dnsContext,
 ) (rc resultCode) {
+	l.DebugContext(ctx, "anti-pollution: falling back to normal resolution (client has custom upstreams)")
+
 	prx := s.proxy()
 	if prx == nil {
 		dctx.err = srvClosedErr
@@ -308,19 +300,6 @@ func (s *Server) resolveNormally(
 	dctx.responseAD = dctx.proxyCtx.Res.AuthenticatedData
 
 	return resultCodeSuccess
-}
-
-// exchangeWithUpstreams sends req to all ups in parallel and returns the first
-// successful response.
-func exchangeWithUpstreams(
-	ups []upstream.Upstream,
-	req *dns.Msg,
-) (resp *dns.Msg, u upstream.Upstream, err error) {
-	if len(ups) == 0 {
-		return nil, nil, fmt.Errorf("no upstreams")
-	}
-
-	return upstream.ExchangeParallel(ups, req)
 }
 
 // domainMatchesWildcard checks if host matches any pattern in the list.
@@ -442,4 +421,32 @@ func extractIPsFromMsg(msg *dns.Msg) (ips []netip.Addr) {
 	}
 
 	return ips
+}
+
+// CloseAPCaches should be called when the server is shutting down or
+// reconfiguring to close the anti-pollution caches and reset them to nil.
+// The caller must hold s.serverLock.
+func (s *Server) CloseAPCaches() {
+	var wg sync.WaitGroup
+
+	if s.apTrustedUC != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = s.apTrustedUC.Close()
+		}()
+	}
+
+	if s.apUntrustedUC != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = s.apUntrustedUC.Close()
+		}()
+	}
+
+	wg.Wait()
+
+	s.apTrustedUC = nil
+	s.apUntrustedUC = nil
 }

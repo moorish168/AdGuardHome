@@ -779,6 +779,13 @@ func (s *Server) handleCacheClear(w http.ResponseWriter, _ *http.Request) {
 	s.dnsProxy.ClearCache()
 	s.conf.ClientsContainer.ClearUpstreamCache()
 
+	if s.apTrustedUC != nil {
+		s.apTrustedUC.ClearCache()
+	}
+	if s.apUntrustedUC != nil {
+		s.apUntrustedUC.ClearCache()
+	}
+
 	_, _ = io.WriteString(w, "OK")
 }
 

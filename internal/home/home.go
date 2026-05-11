@@ -179,7 +179,10 @@ func setupContext(
 
 	if isFirstRun {
 		baseLogger.InfoContext(ctx, "this is the first time adguard home has been launched")
-		checkNetworkPermissions(ctx, baseLogger)
+
+		if !opts.noPermCheck {
+			checkNetworkPermissions(ctx, baseLogger)
+		}
 
 		return nil
 	}

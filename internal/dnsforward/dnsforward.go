@@ -176,6 +176,14 @@ type Server struct {
 	// conf is the current configuration of the server.
 	conf ServerConfig
 
+	// apTrustedUC is the persistent CustomUpstreamConfig for trusted upstreams
+	// in anti-pollution mode.  Its cache is shared across requests.
+	apTrustedUC *proxy.CustomUpstreamConfig
+
+	// apUntrustedUC is the persistent CustomUpstreamConfig for untrusted
+	// upstreams in anti-pollution mode.
+	apUntrustedUC *proxy.CustomUpstreamConfig
+
 	// serverLock protects Server.
 	serverLock sync.RWMutex
 
@@ -874,6 +882,8 @@ func (s *Server) Reconfigure(ctx context.Context, conf *ServerConfig) error {
 	defer s.logger.InfoContext(ctx, "finished reconfiguring server")
 
 	s.stopLocked(ctx)
+
+	s.CloseAPCaches()
 
 	// It seems that net.Listener.Close() doesn't close file descriptors right
 	// away.  We wait for some time and hope that this fd will be closed.
